@@ -1,360 +1,258 @@
 #!/usr/bin/python
 # -*- coding: UTF-8 -*-
 import os
-import re
-import signal
+import time
 import logging
 from platform import platform
 
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, MessageEntity, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import messagequeue as mq
-from telegram import (ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, MessageEntity)
-from telegram.ext import (Updater, CommandHandler, MessageHandler, Filters, ConversationHandler, CallbackQueryHandler)
-# from telegram.utils.request import Request
+from telegram.ext import ContextTypes, Updater, Filters, CommandHandler, MessageHandler, ConversationHandler, CallbackQueryHandler
+from telegram.utils.request import Request
 import telegram.error
 
-from PixivNovels import (saveNovel, saveSeriesAsTxt, saveSeriesAsZip, saveAuthor, getNovelInfo,  getSeriesInfo, getAuthorInfo, getSeriesId, getTags, set2Text, novelAnalyse, seriesAnalyse, formatNovelInfo, formatSeriesInfo)
-from PrintTags import printInfo, getInfo
-from FileOperate import removeFile, zipFile, unzipFile, timethis
-from Convert import convert
-from Translate import translateFile
+from FileOperate import removeFile, timer
+from Recommend import do_recommend, url_init_recommend
+from PixivClass import getId, PixivNovels, PixivSeries, PixivAuthor
 from Webdav4 import uploadAll as uploadWebdav
-from DictRace import racedict
-from config import *
+from config import BOT_TOKEN, TEST_TOKEN, heroku_app_name, proxy_list
 
 
-# logging.basicConfig(level=logging.INFO,
-# 		format='%(levelname)s %(asctime)s [%(filename)s:%(lineno)d] %(message)s',
-# 		datefmt='%Y.%m.%d. %H:%M:%S',
-# 		# filename='parser_result.log',
-# 		# filemode='w'
-# )
 # logger = logging.getLogger(__name__)
+SAVEPIXIV, = range(1)
 
 
-def start(update, context):
-	# chatid = update.message.chat.id
-	# context.bot.send_message(chatid, "sadfsdf")
-	update.message.reply_text("发送Pixiv的小说链接，即可下载小说")
+def start(update: Update, context: ContextTypes):
+	if update.message.chat.type == "supergroup":
+		update.message.reply_text("使用此功能请私聊我哦")
+	else:
+		# chatid = update.message.chat.id
+		update.message.reply_text("我是 @FurryNovels 的投稿bot，发送Pixiv或Linpx小说链接，我就可以帮你下载小说", disable_notification=1)
+		update.message.reply_text("如果下载内容满足【兽人小说】【txt文件】两个条件，我会转发一份到 @FurryReading ，作为你的分享", disable_notification=1)
 
 
-def help(update, context):
-	update.message.reply_text("""
-我是 @FurryNovels 的投稿bot，把Pixiv的小说链接发给我，我就可以帮你下载小说
-""")
-	update.message.reply_text("""
-如果下载内容同时满足【中文】【兽人小说】的【txt文件】三个条件，我会转发一份到 @FurryReading ，作为你的分享
-""")
+def help(update: Update, context: ContextTypes):
+	return start(update, context)
 
 
-def ping(update, context):
+def ping(update: Update, context: ContextTypes):
 	update.message.reply_text(
-		"chat_id: <code>%s</code>\nlanguage_code: <code>%s</code>" % (
-			update.message.chat.id,
-			update.message.from_user.language_code
-			), parse_mode="HTML")
+			f"chat_id: <code>{update.message.chat.id}</code>\nlanguage_code: <code>{update.message.from_user.language_code}</code>",
+			parse_mode="HTML")
 
 
-def delete(update, context):
+def delete(update: Update, context: ContextTypes):
 	if update.message.chat.id == 1348148286:
 		path = os.getcwd()
 		for dir in os.listdir(path):
 			if os.path.isdir(dir) and not dir.startswith("."):
-				directry = os.path.join(path, dir)
-				removeFile(directry)
-				print(f"已删除：{directry}")
+				directory = os.path.join(path, dir)
+				removeFile(directory)
+				print(f"已删除：{directory}")
 				update.message.reply_text(f"已删除：{dir}")
 		update.message.reply_text("删除完成")
-		
-		
-def upload(update, context):
-	if update.message.chat.id == 1348148286:
-		path = os.path.join(os.getcwd(), "Novels")
-		
-		
-def cancel(update, context):
+
+
+def cancel(update: Update, context: ContextTypes):
 	# update.message.reply_text("已取消")
 	pass
 
 
-# def error(update, context):
-# 	logger.warning('Update "%s" caused error "%s"', update, context.error)
+# def error(update: Update, context: ContextTypes):
+# 	logger.warning('Update "%s" caused error "%s"', update: Update, context.error)
 
 
-def download(update, context):
-	def myprint(text):
-		print(text)
-		query.message.chat.send_message(text)
+def pixivFilters(update: Update, context: ContextTypes):
+	string = update.message.text
+	message_id = update.message.message_id
+	language = update.message.from_user.language_code
 	
+	def myprint(*args):
+		for arg in args:
+			update.message.reply_text(arg)
+			print(arg)
 	
-	@timethis
-	def downloadAll(query):
-		data = query.data
-		method = int(data[0])
-		id = data[2:] #传入的id已做过分类处理
-		(filepath, caption, recommend) = downloadA(method, id)
-		upload(filepath, caption, recommend)
-
-
-	def downloadA(method, id):
-		caption = ""
-		recommend = -100
-		if method == 1:
-			myprint("下载单章中……")
-			filepath = saveNovel(id, path)
-			myprint("下载完成，等待上传中……")
-			caption = printInfo(filepath)
-			recommend = novelAnalyse(id)
+	if ("pixiv" in string or "/pn/" in string):
+		id = getId(string)
 		
-		elif method == 2:
-			myprint("下载系列txt合集中……")
-			filepath = saveSeriesAsTxt(id, path)
-			myprint("下载完成，等待上传中……")
-			caption = printInfo(filepath)
-			recommend = seriesAnalyse(id)
+		if "user" in string:  # 去末尾s，兼容linpx
+			object = PixivAuthor(id)
+			info = object.setLinkInfo()
+			photo = open(object.saveAuthorIcon(), 'rb')
+			update.message.chat.send_photo(photo, info, reply_markup=InlineKeyboardMarkup(
+				[[
+					InlineKeyboardButton("下载全部", callback_data=f"{4}:{object.author_id}"),
+					# InlineKeyboardButton("精确下载", callback_data=f"{6}:{object.author_id}"),
+					]]))
 		
-		elif method == 3:
-			myprint("下载系列zip合集中……")
-			filepath = saveSeriesAsZip(id, path)
-			myprint("下载完成，等待上传中……")
+		elif "novel/series" in string:
+			object = PixivSeries(id)
+			info = object.setLinkInfo()
+			update.message.reply_text(info, reply_markup=InlineKeyboardMarkup(
+				[[
+					InlineKeyboardButton("下载系列为txt合集", callback_data=f"{2}:{object.series_id}"),
+					InlineKeyboardButton("下载系列为zip合集", callback_data=f"{3}:{object.series_id}"),
+					# InlineKeyboardButton("自动选择", callback_data=f"{0}:{object.series_id}"),
+					]]))
+		
+		elif "novel" in string:  # 去末尾s，兼容linpx
+			object = PixivNovels(id)
+			info = object.setLinkInfo()
+			if not object.series_id:
+				update.message.reply_text(info, reply_markup=InlineKeyboardMarkup(
+					[[
+						InlineKeyboardButton("下载本章为txt文件", callback_data=f"{1}:{object.novel_id}"),
+						InlineKeyboardButton("下载作者全部小说", callback_data=f"{4}:{object.author_id}"),
+					]]))
 			
-			caption = formatSeriesInfo(id)
-			caption = caption.replace("\n", "\n\t")
-			caption = caption.split("\t")
-			textlist = caption[0:4]
-			text = " "  # 为了快速上传，不检测正文；避免后续报错，text不为空
-			caption = getInfo(text, textlist)
-			recommend = seriesAnalyse(id)
+			else:
+				update.message.reply_text(info, reply_markup=InlineKeyboardMarkup(
+					[[
+						InlineKeyboardButton("下载本章为txt文件", callback_data=f"{1}:{object.novel_id}"),
+						InlineKeyboardButton("下载作者全部小说", callback_data=f"{4}:{object.author_id}"),
+					],  [
+						InlineKeyboardButton("下载系列为txt合集", callback_data=f"{2}:{object.series_id}"),
+						InlineKeyboardButton("下载系列为zip合集", callback_data=f"{3}:{object.series_id}")
+					]]))
 		
-		elif method == 4:
-			myprint("下载作者小说zip合集中……")
-			filepath = saveAuthor(id, path)
-			myprint("下载完成，等待上传中……")
-			caption = getAuthorInfo(id)[0]
-			print(caption)
-		
-		recommend = round(recommend, 2)
-		return filepath, caption, recommend
+		elif "artworks" in string:
+			myprint("不支持下载插画，请重新输入")
+		# PixivIllust(id).save()
+		else:
+			myprint("输入有误，请重新输入")
+	return SAVEPIXIV
+
+
+def savePixiv(update: Update, context: ContextTypes):
+	def myprint(*args):
+		for arg in args:
+			query.message.reply_text(arg)
+			print(arg)
 	
-	
-	@timethis
-	def uploadToUser(path, caption):
-		username = query.message.chat.first_name
-		id = query.message.chat.id
+	@timer
+	def uploadToUser(path, info):
+		# username = query.message.chat.first_name
+		# userid = query.message.chat.id
 		chatid = query.message.chat.id
 		messageid = query.message.message_id
-		
-		if path:
-			print("上传至用户：{} ({})".format(username, id))
-			document = open(path, 'rb')
-			name = os.path.split(path)[1]
-			query.message.chat.send_document(document, name, caption)
+		print(f"UploadTo: {username} ({userid})")
+		query.message.chat.send_document(open(path, 'rb'), os.path.basename(path), info)
+		# context.bot.send_document(chatid, open(path, 'rb'), os.path.basename(path), info)
 		
 		try:
+			pass
 			# context.bot.delete_message(chatid, messageid -1)
 			context.bot.delete_message(chatid, messageid + 0)
 			context.bot.delete_message(chatid, messageid + 1)
 			context.bot.delete_message(chatid, messageid + 2)
 		except telegram.error.BadRequest:
 			pass
-		
-	
-	@timethis
-	def uploadToChannel(channel, path, caption):
-		print("上传至频道：{}".format(channel))
-		document = open(path, 'rb')
-		name = os.path.split(path)[1]
-		context.bot.send_document(channel, document, name, caption)
 	
 	
-	def sendMsgToChannel(channel, caption, msg=""):
-		name = caption.split("\n")[0]
-		link = caption.split("\n")[-4]
-		username = query.message.chat.first_name.replace(" ", "")
-		id = query.message.chat.id
-		
-		message  = f"{msg} <a href='tg://user?id={id}'> {username} </a> #u{id}"
-		message += f"\n{name}\n{link}"
+	@timer
+	def uploadToChannel(channel, path, info):
+		print(f"上传至频道：{channel}")
+		context.bot.send_document(channel, open(path, 'rb'), os.path.basename(path), info)
+	
+	
+	def sendMsgToChannel(channel, message):
 		context.bot.send_message(channel, message, parse_mode="HTML", disable_web_page_preview=1, disable_notification=1, )
 	
 	
-	def furry(caption):
-		furrynum = 0
-		racelist = list(racedict.values())
-		# racelist = list(raceset)
-		for i in range(len(racelist)):
-			race = racelist[i]
-			for i in race:   # 数据格式改为list
-				if i in caption:
-					furrynum += 1
-		
-		if "Furry" in caption or "furry" in caption or "kemono" in caption:
-			furrynum += 5
-		print("福瑞指数：{}".format(furrynum))
-		return furrynum
-	
-	
-	def translate(filepath, language):
-		# language Telegram 语言包
-		if language == "zh-hans":
-			language = "zh_cn"
-		elif language == "zh-hant":
-			language = "zh_tw"
-		
-		path, lang = translateFile(filepath, language)
-		if lang != language:  # 语言不同再翻译
-			info = printInfo(path)
-			info = info.replace(f"#{lang} ", f"#{language} #GoogleTranslate ")
-			# print(path, language, lang, info, sep="\n")
-			return path, info
+	def download(query):
+		method, id = int(query.data[0]), query.data[2:]
+		result, score, furry = "", "", ""
+		if method == 1:
+			myprint("正在下载当前章节……")
+			object = PixivNovels(id)
+			result = object.save(lang2=language)
+		elif method == 2:
+			myprint("正在下载txt合集中……")
+			object = PixivSeries(id)
+			result = object.saveAsTxt(lang2=language)
+		elif method == 3:
+			myprint("正在下载zip合集中……")
+			object = PixivSeries(id)
+			result = object.saveAsZip(lang2=language)
+		elif method == 4:
+			myprint("正在下载此作者全部小说……")
+			object = PixivAuthor(id)
+			result = object.save(lang2=language)
 		else:
-			return None, None
-	
-	
-	@timethis
-	def upload(filepath, caption, recommend):
-		uploadToUser(filepath, caption)
-		if "zh" in caption and "zh" in language and ".zip" not in filepath:  # 中文小说繁简转换
-			(newfilepath, newcaption) = convert(filepath, language)
-			uploadToUser(newfilepath, newcaption)  # 上传文件
-		elif not (f"#{language}" in caption and ".zip" in filepath):   # 其他语言机翻
-			newfilepath, newcaption = translate(filepath, language)
-			uploadToUser(newfilepath, newcaption)  # 上传文件
+			pass
+		myprint("下载完成，等待上传中……")
+		score = object.score
+		furry = object.furry_score
+		novel_id = object.novel_id
+		return result, score, furry, novel_id
+		
+		
+	@timer
+	def upload(query):
+		((path1, info1), (path2, info2)), score, furry, novel_id = download(query)
+		
+		uploadToUser(path1, info1)
+		if path2:
+			uploadToUser(path2, info2)
+		
+		info = f"{info1}\n\n来自 {username} 的分享\n"
+		if score > -100:
+			info += f"推荐指数： {score} (仅供参考)\n"
+		info += f"喜欢还请去Pixiv收藏或评论，以支持作者 @FurryNovels"
+		info2 = info.replace(info1, info2)
+		
+		infolist = info1.split("\n")
+		log = f" <a href='tg://user?id={userid}'>{username}</a> #U{userid}\n{infolist[0]}\n{infolist[1]}\n{infolist[2]}"
+		if infolist[2] != infolist[-1]:
+			log += f"\n{infolist[-1]}"
+		
+		if "Windows" in platform():  # 测试用
+			uploadToChannel("-1001286539630", path1, info)
+			if path2:
+				uploadToChannel("-1001286539630", path1, info)
+			sendMsgToChannel("-1001286539630", f"#测试 {log}")
 			
-		furrynum = furry(caption)
-		username = query.message.chat.first_name
-		caption += "\n来自 {} 的分享".format(username)
-		if recommend > -100:
-			caption += "\n推荐指数： {} @FurryNovels".format(recommend)
-			
-		if "Windows" in platform():  # 测试用频道
-			uploadToChannel("-1001286539630", filepath, caption)
-			sendMsgToChannel("-1001286539630", caption, msg="#测试")
-		elif furrynum >= 3 and (".zip" not in filepath):  # 兽人小说且不为zip
-			uploadToChannel("@FurryReading", filepath, caption)
-			sendMsgToChannel("-1001286539630", caption, msg="#兽人小说")
-			uploadWebdav(filepath)
-			
-			if "zh" in caption and recommend >= 7:  # 中文，优秀，小说
-				uploadToChannel("@FurryNovels", filepath, caption)
+		elif furry >= 3 and ".zip" not in path1:  # 兽人小说 txt
+			uploadToChannel("@FurryReading", path1, info)
+			sendMsgToChannel("-1001286539630", f"#兽人小说 {log}")
+			if path2:  # 上传翻译文件
+				uploadToChannel("@FurryReading", path2, info2)
+				
+			if "zh" in info and score >= 7:  # 中文优秀非机翻小说
+				uploadToChannel("@FurryNovels", path1, info)
+				uploadWebdav(path1)
+		
+		elif furry >= 3 and ".zip" in path1:  # 兽人小说 zip
+			sendMsgToChannel("-1001286539630", f"#兽人小说 {log}")
+		else:  #非兽人小说
+			sendMsgToChannel("-1001286539630", f"#非兽人小说 {log}")
+		
+		if True:  # 友情提示
+			query.message.chat.send_message("还请去Pixiv，给作者一个收藏/评论，以表支持")
+			time.sleep(5)
+		if not path2:
+			context.bot.delete_message(query.message.chat.id, query.message.message_id + 4)
 		else:
-			sendMsgToChannel("-1001286539630", caption, msg="#非兽人小说")
-		print("")
+			context.bot.delete_message(query.message.chat.id, query.message.message_id + 5)
 	
 	
 	query = update.callback_query
-	language = update.callback_query.from_user.language_code
+	userid = query.message.chat.id
+	username = query.from_user.first_name
+	language = query.from_user.language_code
+	if "zh-hans" in language:
+		language = "zh_cn"
+	elif "zh-hant" in language:
+		language = "zh_tw"
 	if query.data != "":  # 清除按钮
 		query.edit_message_reply_markup(InlineKeyboardMarkup([[]]))
-	# print(query)
-	downloadAll(query)
+	upload(query)
+	return ConversationHandler.END
+	
 
-
-def botmain(update, context):
-	def myprint(text):
-		print(text)
-		update.message.reply_text(text)
-	
-	
-	def wrongType(text):
-		if "频道" in text or "頻道" in text:
-			myprint("欢迎关注我们的频道 @FurryNovels @FurryReading")
-		elif "群" in text:
-			myprint("群组链接： https://t.me/FurryNovels/27")
-		elif "分享" in text or "投稿" in text or "下载" in text:
-			myprint("向我发送 Pixiv 的小说链接就可以了")
-		elif "你好" in text:
-			myprint("不用向我问好，向我发送 Pixiv 的小说链接就行")
-		else:
-			myprint("""请发送 Pixiv/Linpx 小说链接，如：
-https://pixiv.net/novels/show.php?id=15426800
-https://furrynovel.xyz/pixiv/novel/15426800
-""")
-	
-	
-	def testSeries(novel_id):
-		user_id = getNovelInfo(novel_id)[6]
-		(title, author, caption) = getNovelInfo(novel_id)[0:3]
-		tags = getTags(novel_id, set())
-		tags = set2Text(tags)
-		text = "{}\n作者：{}\n标签：{}".format(title, author, tags)
-		
-		if getSeriesId(novel_id)[0] is None:
-			update.message.reply_text(text, reply_markup=InlineKeyboardMarkup([[
-			InlineKeyboardButton("下载本章为txt文件", callback_data="{}:{}".format(1, novel_id)),
-			InlineKeyboardButton("下载此作者全部小说", callback_data="{}:{}".format(4, user_id)),
-				]]), disable_web_page_preview=1)
-		
-		else:
-			series_id = getSeriesId(novel_id)[0]
-			(title, author, caption, count) = getSeriesInfo(series_id)[0:4]
-			text += "\n\n系列：{}，共{}篇\n".format(title, count)
-			update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(
-		[[
-			InlineKeyboardButton("下载本章为txt文件", callback_data="{}:{}".format(1, novel_id)),
-			InlineKeyboardButton("下载此作者全部小说", callback_data="{}:{}".format(4, user_id)),
-		], [
-			InlineKeyboardButton("下载系列为txt合集", callback_data="{}:{}".format(2, series_id)),
-			InlineKeyboardButton("下载系列为zip合集", callback_data="{}:{}".format(3, series_id)),
-		]]))
-			
-			
-	def saveSeries(series_id):
-		(title, author, caption, count) = getSeriesInfo(series_id)[0:4]
-		text = "系列：{}，共{}篇\nBy {}\n\n{}".format(title, count, author, caption)
-		update.message.reply_text(text, reply_markup=InlineKeyboardMarkup([[
-			InlineKeyboardButton("下载系列为txt合集", callback_data="{}:{}".format(2, series_id)),
-			InlineKeyboardButton("下载系列为zip合集", callback_data="{}:{}".format(3, series_id)),
-		]]))
-		
-		
-	def saveAuthor(user_id):
-		photo = open(getAuthorInfo(user_id)[1], 'rb')
-		caption = getAuthorInfo(user_id)[0]
-		update.message.chat.send_photo(photo, caption, reply_markup=InlineKeyboardMarkup([[
-			InlineKeyboardButton("下载此作者全部小说", callback_data="{}:{}".format(4, user_id)),
-			# InlineKeyboardButton("精确下载", callback_data="{}:{}".format(6, user_id)),
-		]]))
-
-	
-	def savePixiv(text, id):  # 支持Pixiv与linpx
-		if "pixiv" in text:
-			if "user" in text:  # 去末尾s，兼容linpx
-				saveAuthor(id)
-			elif "novel/series" in text:
-				saveSeries(id)
-			elif "novel" in text:
-				testSeries(id)
-			elif "artworks" in text:
-				myprint("不支持下载插画，请重新输入")
-		elif "/pn/" in text or text == id:  # 兼容linpx分享链接
-			testSeries(id)
-		else:
-			wrongType(text)
-		
-	
-	def getId(update, context):
-		text = update.message.text
-		messageid = update.message.message_id
-		
-		pat = "(?:https?|ftp|file)://[-A-Za-z0-9+&@#/%?=~_|!:,.;]+[-A-Za-z0-9+&@#/%=~_|]"
-		if re.findall(pat, text) and re.findall("[0-9]{5,}", text):   # 获取网址链接
-			text = re.findall(pat, text)[0]
-			id = re.findall("[0-9]{5,}", text)[0]
-			savePixiv(text, id)  # 支持Pixiv与linpx
-			
-		elif re.findall("[0-9]{5,}", text):   # 兼容小说id
-			pat = "[-A-Za-z0-9+&@#/%?=~_|!:,.;]+[-A-Za-z0-9+&@#/%=~_|]"
-			text = re.findall(pat, text)[0]
-			id = re.findall("[0-9]{5,}", text)[0]
-			if re.findall(pat, text):
-				savePixiv(text, id)
-		else:
-			wrongType(text)
-	
-	try:
-		getId(update, context)
-	except AttributeError as e:
-		logging.info(e)
+def timeoutcb(update: Update, context: ContextTypes):
+	print(f"Conversation timed out: uid={context.user_data['uid']}")
+	context.user_data.clear()
 
 
 def main():
@@ -364,24 +262,32 @@ def main():
 	
 	elif "Linux" in platform():
 		updater.start_webhook(
-			listen="0.0.0.0",
-			port=int(os.environ.get('PORT', 5000)),
-			url_path=BOT_TOKEN,
-			webhook_url=f"https://{heroku_app_name}.herokuapp.com/{BOT_TOKEN}")
-	# updater.bot.set_webhook(f"https://{heroku_app_name}.herokuapp.com/{BOT_TOKEN}")
-	# signal.signal(signal.SIGTERM, handler_stop_signals)
+				listen="0.0.0.0",
+				port=int(os.environ.get('PORT', 5000)),
+				url_path=BOT_TOKEN,
+				webhook_url=f"https://{heroku_app_name}.herokuapp.com/{BOT_TOKEN}")
 	
-	dispatcher = updater.dispatcher
-	dispatcher.add_handler(CommandHandler("start", start))
-	dispatcher.add_handler(CommandHandler("help", help))
-	dispatcher.add_handler(CommandHandler("ping", ping))
-	dispatcher.add_handler(CommandHandler("cancel", cancel))
-	dispatcher.add_handler(CommandHandler("delete", delete))
-	dispatcher.add_handler(MessageHandler(Filters.text, botmain))
-
-	# dispatcher.add_handler(MessageHandler(Filters.document, )
-	updater.dispatcher.add_handler(CallbackQueryHandler(download))
-	# dispatcher.add_error_handler(error)
+	updater.dispatcher.add_handler(CommandHandler("start", start))
+	updater.dispatcher.add_handler(CommandHandler("help", help))
+	updater.dispatcher.add_handler(CommandHandler("ping", ping))
+	updater.dispatcher.add_handler(CommandHandler("cancel", cancel))
+	updater.dispatcher.add_handler(CommandHandler("delete", delete))
+	updater.dispatcher.add_handler(ConversationHandler(
+		entry_points=[
+			MessageHandler(Filters.regex('[pixiv, pn].+[0-9]{5,}'), pixivFilters),
+			],
+		states={
+			SAVEPIXIV: [
+				CallbackQueryHandler(savePixiv, pattern=".+"),
+				],
+			ConversationHandler.TIMEOUT: [MessageHandler(None, timeoutcb)],
+			},
+		fallbacks=[],
+		conversation_timeout=300,
+		))
+	
+	# updater.dispatcher.add_handler(MessageHandler(Filters.document, )
+	# updater.dispatcher.add_error_handler(error)
 	updater.idle()
 
 
@@ -390,12 +296,13 @@ if __name__ == '__main__':
 	path = os.path.join(path, "Novels")
 	
 	if "Windows" in platform():
-		REQUESTS_KWARGS = {'proxy_url':'HTTPS://127.0.0.1:10808/'}
-		BOT_TOKEN = TEST_TOKEN
+		# REQUESTS_KWARGS = {'proxy_url':'HTTPS://127.0.0.1:10808/'}
+		REQUESTS_KWARGS = {'proxy_url': proxy_list[0]}
+		BOT_TOKEN = TEST_TOKEN  # 使用测试bot
 	
 	elif "Linux" in platform():
 		REQUESTS_KWARGS = {}
 		BOT_TOKEN = BOT_TOKEN
 	
-	print("Bot Run!")
+	print("Bot Runs!")
 	main()

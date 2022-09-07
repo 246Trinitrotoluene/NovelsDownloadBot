@@ -1,48 +1,59 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import os
 import logging
-
-import pixivpy3
-from pixivpy3 import AppPixivAPI
 from platform import platform
 
+import pixivpy3
+from pixivpy3 import AppPixivAPI, ByPassSniApi
 
-logging.basicConfig(level=logging.INFO,
-		format='%(levelname)s %(asctime)s [%(filename)s:%(lineno)d] %(message)s',
-		datefmt='%Y.%m.%d. %H:%M:%S',
-		# filename='parser_result.log',
-		# filemode='w'
-		)
+from config import proxy_list
 
 
 class TokenRoundRobin:
-	aapis = []
+	apis = []
 	tokenCount = 0
 	callCount = 0
 
 	def __init__(self, tokens: list):
 		if "Windows" in platform():
-			REQUESTS_KWARGS = {'proxies': {'https': 'http://127.0.0.1:10808', }}
+			# REQUESTS_KWARGS = {'proxies': {'https': 'http://127.0.0.1:10808', }}
+			REQUESTS_KWARGS = {'proxies': {'https': proxy_list[0]}, }
 		elif "Linux" in platform():
 			REQUESTS_KWARGS = {}
+		else:
+			REQUESTS_KWARGS = {'proxies': {'https': proxy_list[0]}, }
 			
 		for i in range(len(tokens)):
-			t = tokens[i]
-			if not isinstance(t, str):
+			token = tokens[i]
+			if not isinstance(token, str):
 				continue
 			try:
-				aapi = AppPixivAPI(**REQUESTS_KWARGS)
-				aapi.set_accept_language("en-us")  # zh-cn
-				aapi.auth(refresh_token=t)
-				print("{} is OK!".format(t))
-				self.aapis.append(aapi)
+				if REQUESTS_KWARGS or "Linux" in platform():
+					api = AppPixivAPI(**REQUESTS_KWARGS)
+				else:
+					print("尝试使用 BAPI")
+					api = ByPassSniApi()
+					api.require_appapi_hosts()
+					
+				api.set_accept_language("en-us")  # zh-cn
+				api.auth(refresh_token=token)
+				print(f"{token} is OK!")
+				self.apis.append(api)
 				self.tokenCount += 1
+				
 			except pixivpy3.utils.PixivError as e:
-				print(f"请检查网络可用性，或更换TOKEN{i+1} ")
-				print("{} is not OK, ignoring!".format(t))
-		print("Finished initialising, {} tokens is available.".format(self.tokenCount))
+				# print(f"请检查网络是否可用，或更换TOKEN{i+1} ")
+				print(f"{i+1}.{token} is not OK, ignoring!")
+		print(f"Finished initialising, {self.tokenCount} tokens is available.")
 
-	def getAAPI(self) -> AppPixivAPI:
+
+	def getAPI(self) -> AppPixivAPI:
 		self.callCount += 1
-		logging.info(f"Requesting token, returning #{self.callCount % self.tokenCount}, total {self.callCount}")
-		return self.aapis[self.callCount % self.tokenCount]
+		if self.tokenCount == 0:
+			logging.critical("请检查网络，或更换TOKENS")
+			os._exit(1)
+		else:
+			logging.info(f"Requesting token #{(self.callCount-1) % self.tokenCount +1}, total {self.callCount}")
+			return self.apis[self.callCount % self.tokenCount]
+		
