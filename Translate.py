@@ -9,7 +9,7 @@ from requests.exceptions import SSLError
 from opencc import OpenCC
 from pygtrans import Translate
 
-from FileOperate import openText, saveText, findFile, timer, monthNow
+from FileOperate import openText, openDocx, saveText, saveDocx, findFile, timer, monthNow
 from TextFormat import formatText
 from config import proxy_list, default_path, cjklist, testMode
 from translated import langs, words, wordsdict
@@ -142,7 +142,7 @@ def convertText(text: str, *, lang2: str, lang1="") -> str:  # 原来是 languag
 	
 def translateText(text: str, *, lang2: str, lang1="", mode=0) -> str:
 	# lang1 原始语言，lang2 目标语言
-	# mode==0 不处理，mode==1 添加空行与首行空格
+	# mode==0 不处理；mode==1 添加空行与首行空格；mode==2 前4行不添加空格，后面正常排版
 	translated = []
 	textlist = text.split("\n")
 	
@@ -169,7 +169,11 @@ def translateText(text: str, *, lang2: str, lang1="", mode=0) -> str:
 		
 		if mode == 0:
 			text = "\n".join(translated)
-		else:   # 优化翻译：前4行不添加空格，后面正常排版
+		elif mode == 1:  # 优化排版：前2行不添加空格，后面正常排版
+			text = "\n".join(translated[2:])
+			text = formatText(text, lang2)
+			text = "\n".join(translated[:2]) + text
+		else:   # 优化排版：前4行不添加空格，后面正常排版
 			text = "\n".join(translated[5:])
 			text = formatText(text, lang2)
 			text = "\n".join(translated[:5]) + text
@@ -184,6 +188,10 @@ def translate(text: str, *, lang2: str, lang1="", mode=0) -> str:
 		lang1 = getLang(text)
 	if not lang2:
 		lang2 = getLangSystem()
+	if "zh-hans" in lang2:
+		lang2 = "zh_cn"
+	elif "zh-hant" in lang2:
+		lang2 = "zh_tw"
 	
 	if lang1 != lang2:
 		if "zh" in lang1 and "zh" in lang2:
@@ -244,25 +252,48 @@ def transDir(lang2="en") -> str:
 	return trans_dir
 
 
-def translateFile(path: str, lang2=getLangSystem()) -> [str, None]:
-	text = openText(path)
+def translateFile(path: str, lang2=getLangSystem(), mode=2) -> [str, None]:
+	if "zh-hans" in lang2:
+		lang2 = "zh_cn"
+	elif "zh-hant" in lang2:
+		lang2 = "zh_tw"
+		
+	if path.endswith(".txt"):
+		text = openText(path)
+	elif path.endswith(".docx"):
+		text = openDocx(path)
+	else:
+		text = ""
+		raise AttributeError("无法打开非 txt 或 docx 文件")
+		
 	lang1 = getLang(text)
 	trans_dir = transDir(lang2)
+	if lang1 == lang2:
+		raise RuntimeError("语言相同，无需转换")
 	
-	if lang1 != lang2 and (trans_dir not in path):
-		dir2 = []   # 构造翻译文件路径
-		dir1 = path.replace(f"{default_path}\\", "")
-		dir1 = dir1.replace(f"{os.getcwd()}\\Novels\\", "")
-		dir1 = dir1.split("\\")
-		for text0 in client.translate(dir1, target=lang2):
-			dir2.append(text0.translatedText)
-		dir2 = "\\".join(dir2)
-		trans_path = os.path.join(default_path, trans_dir, dir2)
-		# print(dir1, dir2, sep="\n")
-		# print(path)
+	if lang1 != lang2 and (trans_dir not in path) and lang1:
+		if mode == 1:  # 单独文件翻译
+			name = os.path.basename(path)
+			name = translate(name, lang1=lang1, lang2=lang2)
+			trans_path = os.path.join(os.getcwd(), "Translation", monthNow(), name)
+			
+		else:  # Pixiv 小说翻译
+			dir2 = []   # 构造翻译文件路径
+			dir1 = path.replace(f"{default_path}\\", "")
+			dir1 = dir1.replace(f"{os.getcwd()}\\Novels\\", "")
+			dir1 = dir1.split("\\")
+			for text0 in client.translate(dir1, target=lang2):
+				dir2.append(text0.translatedText)
+			dir2 = "\\".join(dir2)
+			trans_path = os.path.join(default_path, trans_dir, dir2)
+			# print(dir1, dir2, sep="\n")
+		# print(path, trans_path)
 		
-		text = translate(text, lang1=lang1, lang2=lang2, mode=1)
-		saveText(trans_path, text)
+		text = translate(text, lang1=lang1, lang2=lang2, mode=mode)
+		if path.endswith(".txt"):
+			saveText(trans_path, text)
+		elif path.endswith(".docx"):
+			saveDocx(trans_path, text, original=path)
 		return trans_path
 	
 	
