@@ -9,7 +9,7 @@ from webdav4.client import Client, HTTPError
 from httpx import ConnectError, ReadTimeout, WriteTimeout
 
 from FileOperate import removeFile, zipFile, timer
-from config import webdavs4 as webdavs, encryptlist, testMode
+from configuration import webdavs4 as webdavs, encryptlist, PASSWORD, testMode
 
 
 # webdavs = {
@@ -19,12 +19,6 @@ from config import webdavs4 as webdavs, encryptlist, testMode
 # 		"password": ""   # 你的密码
 # 	},
 # }
-
-
-logging.basicConfig(
-		level=logging.INFO,
-		format='[line:%(lineno)d]-%(levelname)s: %(message)s',
-		)
 
 
 def monthNow():
@@ -37,7 +31,7 @@ def monthNow():
 
 
 # @timer
-def upload(webdav: dict, path: os.PathLike, folder=""):
+def upload(webdav: dict, path: str, folder=""):
 	def makedirs(path: str):
 		a = path.split("/")
 		for i in range(1, len(a)):  # 去文件名
@@ -88,7 +82,7 @@ def upload(webdav: dict, path: os.PathLike, folder=""):
 		logging.exception(e)
 	
 	
-def uploadAll(path: os.PathLike, folder: str, *, encrypt=0, delete=0):
+def uploadAll(path: str, folder: str, *, encrypt=0, delete=0):
 	# 默认使用 encryptlist 进行加密；encrypt=1 强制加密
 	# delete=1 时，上传后删除源文件
 	
@@ -98,7 +92,7 @@ def uploadAll(path: os.PathLike, folder: str, *, encrypt=0, delete=0):
 		baseurl = webdav.get("baseurl")
 		if encrypt == 1 or baseurl in encryptlist:  # 加密压缩
 			if not os.path.exists(zippath):
-				filepath = zipFile(path, "furry")
+				filepath = zipFile(path, password=PASSWORD)
 			else:
 				filepath = zippath
 		else:  # 直接上传
@@ -135,21 +129,21 @@ def remove(webdav: dict, path: str):
 	
 	
 def removeAll(path: str):
-	webdavs = list(webdavs.keys())
 	for webdav in webdavs:
 		webdav = webdavs.get(webdav)
 		remove(webdav, path)
 		
-		
+	
 def addWebdavDict():
 	d0 = {}
 	i = 1
 	text = " "  # 外层 while 第一次运行
-	while text != "":
+	while text:
 		
 		# 获取网址链接
-		text = input(f"\n请输入第{i}组 Webdav 服务网址，按 Enter 键确认：\n")
-		while text != "":
+		
+		while text:
+			text = input(f"\n请输入第{i}组 Webdav 服务网址，按 Enter 键确认：\n")
 			pat = "(?:https?|ftp|file)://[-A-Za-z0-9+&@#/%?=~_|!:,.;]+[-A-Za-z0-9+&@#/%=~_|]"
 			if re.findall(pat, text) and "dav" in text:
 				webdavurl = re.findall(pat, text)[0]
@@ -161,12 +155,11 @@ def addWebdavDict():
 					print(f"{webdavname}已存在，请录入其他数据或按 Enter 键退出")
 					text = input(f"\n请输入第{i}组 Webdav 服务网址：\n")
 			else:
-				print("输入有误，请重新输入，退出请按 Enter 键")
-				text = input(f"\n请输入第{i}组 Webdav 服务器地址：\n")
+				print("输入有误，请重新输入，退出请按 Enter 键\n")
 		
 		# 获取邮箱地址
-		text = input(f"\n请输入第{i}组 Webdav 账户，按 Enter 键确认：\n")
-		while text != "":
+		while text:
+			text = input(f"\n请输入第{i}组 Webdav 账户，按 Enter 键确认：\n")
 			pat = r"([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)"
 			if re.findall(pat, text):
 				username = re.findall(pat, text)[0]
@@ -174,18 +167,17 @@ def addWebdavDict():
 				break
 			else:
 				print("输入有误，请重新输入，退出请按 Enter 键")
-				text = input(f"\n请输入第{i}组 Webdav 账户：\n")
 		
 		# 获取密码
-		text = input(f"\n请输入第{i}组 Webdav 密码，按 Enter 键确认：\n")
-		while text != "":
+		
+		while text:
+			text = input(f"\n请输入第{i}组 Webdav 密码，按 Enter 键确认：\n")
 			if text:
 				password = text
 				print(f"第{i}组 Webdav 密码：{password}")
 				break
 			else:
 				print("输入有误，请重新输入，退出请按 Enter 键")
-				text = input(f"\n请输入第{i}组 Webdav 服务密码：\n")
 		
 		webdavname = webdavurl.split(".")[1]
 		if webdavurl and username and password:
@@ -201,8 +193,7 @@ def addWebdavDict():
 	
 	
 def test():
-	path = r""
-	uploadAll(path, "翻译")
+	print("测试")
 	pass
 
 

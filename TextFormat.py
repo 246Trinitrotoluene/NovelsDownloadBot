@@ -1,11 +1,13 @@
 #!/usr/bin/python
 # -*- coding: UTF-8 -*-
 import re
+import logging
 from html import unescape
 from functools import wraps
 
 from FileOperate import formatFileName
-from config import cjklist, eulist, testMode
+from GetLanguage import getLanguage
+from configuration import cjklist, eulist, testMode
 
 
 def checkNone(function):
@@ -14,10 +16,33 @@ def checkNone(function):
 		try:
 			result = function(*args, **kwargs)
 		except Exception as e:
-			print(e)
 			result = ""
+			logging.error(f"{function.__name__}: {e}")
 		return result
 	return wrapper
+	
+	
+class MyStr(str):
+	def __new__(cls, value):
+		return str.__new__(cls, value)
+	
+	
+	def __init__(self, value):
+		self.value = value
+	
+	
+	def isAlpha(self) -> bool:
+		for char in self.value:
+			if not "\u0000" <= char <= "\u007f":
+				return False
+		return True
+	
+	
+	def isChinese(self) -> bool:  # 检验是否全是中文字符
+		for char in self.value:
+			if not "\u4e00" <= char <= "\u9fa5":
+				return False
+		return True
 	
 	
 def isAlpha(string: str) -> bool:
@@ -27,7 +52,7 @@ def isAlpha(string: str) -> bool:
 	return True
 
 
-def isContainAlpha(string: str) -> bool:
+def containsAlpha(string: str) -> bool:
 	for char in string:
 		if "\u4e00" <= char <= "\u9fa5":
 			return True
@@ -41,13 +66,13 @@ def isChinese(string: str) -> bool:  # 检验是否全是中文字符
 	return True
 
 
-def isContainsChinese(string: str) -> bool: # 检验是否含有中文字符
+def containsChinese(string: str) -> bool:  # 检验是否含有中文字符
 	for char in string:
 		if "\u4e00" <= char <= "\u9fa5":
 			return True
 	return False
-	
-	
+
+
 @checkNone
 def formatNovelName(name: str) -> str:
 	if re.findall("[(（].*(委托|赠给).*[)）]", name):  # 梦川云岚OwO，优化
@@ -60,7 +85,8 @@ def formatNovelName(name: str) -> str:
 	
 	elif re.findall("([给給]?.+?的?(?:委托|合委|赠文|无偿))", name):
 		# pattern = "((?:给|給)?.+?的?(?:委托|赠文|无偿))(?::|：|;|；|,|，)?(.+?)((?:（| ).*）?)"
-		# pattern = "((?:给|給)?.+?的?(?:委托|赠文|无偿))(?::|：|;|；|,|，)?(.+)"
+		# pattern = "(?:委托|赠文|无偿)(?::|：|;|；|,|，|。|-|-\s)?(.+)"
+		
 		pattern = "((?:给|給)?.+?的?(?:委托|赠文|无偿|合委))[:;, ：；，]?(.+)"
 		# todo：XXX 委托 标记符 名称，只考虑从后半部分提取名称
 		text = re.findall(pattern, name)
@@ -74,7 +100,8 @@ def formatNovelName(name: str) -> str:
 			if len(b) >= 1:
 				name = text[0][1].strip()
 	
-	name = name.replace("《", "").replace("》", "")
+	# name = name.replace("《", "").replace("》", "")
+	name = re.sub("[《》【】（）]", "", name)
 	name = formatFileName(name)
 	# print(name)
 	return name
@@ -94,17 +121,17 @@ def formatTextIndent(text: str) -> str:
 		文字连接符    通用标点	⁠
 		零宽不换行空格（Zero Width No-Break Space） ﻿
 		"""
-	pattern = " ​﻿     "
+	pattern = "[ ​﻿     ]"
 	text = re.sub(pattern, "", text)
-	text = re.sub("\n +", "\n", text)        # 删除段首半角空格
-	text = re.sub("\n　+", "\n", text)       # 删除段首全角空格
+	text = re.sub("\n +", "\n", text)         # 删除段首半角空格
+	text = re.sub("\n　+", "\n", text)        # 删除段首全角空格
 	text = re.sub("\n{3,}", "\n\n\n", text)  # 删除多余空行
 	return text
 	
 	
 @checkNone
 def formatTextPunctuation(text: str) -> str:
-	text = re.sub("\\.{3,}", "…", text)  # 省略号标准化
+	text = re.sub(r"\.{3,}", "…", text)  # 省略号标准化
 	text = re.sub("。。。{3,}", "……", text)
 	text = re.sub("!{3,}", "!!!", text)  # 感叹号标准化
 	text = re.sub("！{3,}", "！！！", text)
@@ -113,58 +140,68 @@ def formatTextPunctuation(text: str) -> str:
 
 @checkNone
 def formatPixivText(text: str) -> str:
-	# 处理 Pixiv 标识符 [newpage]
+	# 处理 Pixiv 标识符
+	# [newpage] 分页
 	text = text.replace("[newpage]", "\n\n")
 	
 	# [chapter: 章节名称]
 	if "[chapter:" in text:
-		a = re.findall("\\[chapter:(.*)]", text)
+		a = re.findall(r"\[chapter:(.*)]", text)
 		for i in range(len(a)):
 			string = a[i]
 			if "第" in string and "章" in string:
 				string = string.replace("章", "节")
-			elif re.search("\\d+", string):
+			elif re.search(r"\d+", string):
 				string = f"第{string}节"
-			elif re.search("[二三四五六七八九]?十?[一二三四五六七八九十]", string):
+			elif re.search(r"[二三四五六七八九]?十?[一二三四五六七八九十]", string):
 				string = f"第{string}节"
 			else:
 				string = f"第{i + 1}节 {string}"
-			text = re.sub("\\[chapter:(.*)]", string, text, 1)
+			text = re.sub(r"\[chapter:(.*)]", string, text, 1)
 	
 	# [jump: 链接目标的页面编号]
 	if "[jump:" in text:
-		a = re.findall("\\[jump:(.*)]", text)
+		a = re.findall(r"\[jump:(.*)]", text)
 		for i in range(len(a)):
 			string = a[i]
 			string = f"跳转至第{string}节"
-			text = re.sub("\\[jump:(.*)]", string, text, 1)
+			text = re.sub(r"\[jump:(.*)]", string, text, 1)
 	
-	# [pixivimage: 作品ID]
+	# [pixivimage: 插画ID]
 	if "[pixivimage:" in text:
-		a = re.findall("\\[pixivimage: (.*)]", text)
+		a = re.findall(r"\[pixivimage: (.*)]", text)
 		for i in range(len(a)):
 			string = a[i].strip(" ")
 			string = f"插图：https://www.pixiv.net/artworks/{string}"
-			text = re.sub("\\[pixivimage:(.*)]", string, text, 1)
+			text = re.sub(r"\[pixivimage:(.*)]", string, text, 1)
 	
 	# [[jumpuri: 标题 > 链接目标的URL]]
 	if "[jumpuri:" in text:
-		a = re.findall("\\[{2}jumpuri: *(.*) *> *(.*)]{2}", text)
+		a = re.findall(r"\[{2}jumpuri: *(.*) *> *(.*)]{2}", text)
 		for i in range(len(a)):
 			name = a[i][0]
 			link = a[i][1]
 			if link in name:
-				text = re.sub("\\[{2}jumpuri: *(.*) *> *(.*)]{2}", link, text, 1)
+				text = re.sub(r"\[{2}jumpuri: *(.*) *> *(.*)]{2}", link, text, 1)
 			else:
 				string = f"{name}【{link}】"
-				text = re.sub("\\[{2}jumpuri: *(.*) *> *(.*)]{2}", string, text, 1)
+				text = re.sub(r"\[{2}jumpuri: *(.*) *> *(.*)]{2}", string, text, 1)
 				
 	# [uploadedimage: 上传图片自动生成的ID] 会被 pixivpy 转换
 	if "If you would like to view illustrations" in text:
 		pattern = "If you would like to view illustrations, please use your desktop browser."
 		string = "【本文内有插图，请在 Pixiv 查看】\n"
 		text = re.sub(pattern, string, text)
-		
+	
+	# [[rb: 汉字 > 假名]]  # 汉字《假名》 错误转换
+	if "[rb:" in text:
+		a = re.findall(r"\[{2}rb: *(.*) *> *(.*)]{2}", text)
+		for i in range(len(a)):
+			# text0 = f"{a[i][0]}{a[i][1]}"
+			text0 = f"{a[i][0]}《{a[i][1]}》"  # 被Pixiv 误导后转换
+			text = re.sub(r"\[{2}rb: *(.*) *> *(.*)]{2}", text0, text, 1)
+			
+	# print(text)
 	return text
 	
 	
@@ -181,7 +218,6 @@ def formatCaption(text: str) -> str:
 		# <a href="pixiv://novels/12345">novel/12345</a>
 		# <a href="pixiv://users/12345">user/12345</a>
 		
-		# pattern = r'<a href="pixiv://[illusts,novels,users]/[0-9]{5,}">[illust,novel,user]/[0-9]{5,}</a>'  # 无效写法
 		pattern = r'<a href="pixiv://(?:illusts|novels|users)/[0-9]{5,}">(?:illust|novel|user)/[0-9]{5,}</a>'
 		for string in re.findall(pattern, text):
 			id = re.search("[0-9]{5,}", string).group()
@@ -202,26 +238,30 @@ def formatCaption(text: str) -> str:
 			text = re.sub(pattern, link, text, 1)
 	# print(text)
 	return text
-	
-	
+
+
 # def formatText(text: str, lang:str) -> str:
-def formatText(text: str, lang="zh") -> str:
+def formatText(text: str, lang="") -> str:
 	text = f"\n{text}"
 	text = formatTextIndent(text)
 	text = formatPixivText(text)
 	text = formatTextPunctuation(text)
+	if not lang:
+		lang = getLanguage(text)
 	if lang in cjklist:                       # 中文格式
-		text = re.sub("\n", "\n　　", text)   # 添加2个全角空格
+		text = re.sub("\n", "\n　　", text)    # 添加2个全角空格
 	elif lang in eulist:                      # 英文格式
 		text = re.sub("\n", "\n    ", text)   # 添加4个半角空格
 	return text
 	
 	
 def test():
+	print("测试")
 	pass
 	
 	
 if __name__ == '__main__':
+	testMode = 1
 	if testMode:
 		test()
 	

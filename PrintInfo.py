@@ -1,16 +1,15 @@
 #!/usr/bin/python
 # -*- coding: UTF-8 -*-
 import os
-import logging
-from platform import platform
 from functools import cmp_to_key
 
 from opencc import OpenCC
 
+from FileOperate import readFile, findFile, timer
+from GetLanguage import getLanguage
 from MakeTags import hashtags, cntags, entags, racetags, racedict, racelist, cmp
-from FileOperate import openText, openDocx, openDoc, findFile, timer
-from Translate import getLanguage, transWords
-from config import default_path, testMode
+from Translate import transWords
+from configuration import novel_path, testMode
 
 
 def sortTags(tags: set) -> str:  # 按dict内顺序对转换后的标签排序
@@ -46,21 +45,18 @@ def getTagsFromText(text: str, lang="") -> tuple[set, set]:  # 获取可能存�
 		times = 5  # 15过高；
 	else:
 		times = 5
-		if "zh" in lang or "ja" in lang:
+		if "zh" in lang or "ja" in lang:  # 提高运行速度
 			dict0.update(cntags)
 		else:
 			dict0.update(entags)
 			
 	tags1, tags2 = set(), set()
-	list1 = list(dict0.keys())
-	list2 = list(dict0.values())
-	for i in range(0, len(list1)):
-		tag1 = list1[i]
+	for tag1 in dict0:
 		if 10000 * text.count(tag1) / len(text) >= times:
-			tags1.add(tag1)        # 汉字标签
-			for tag2 in list2[i]:  # 英文标签，新数据格式list
+			tags1.add(tag1)  # 汉字标签
+			for tag2 in dict0[tag1]:  # 英文标签，新数据格式list
 				tags2.add(tag2)
-				
+		
 	# if tags1 != set():
 	# 	logging.info(f"{tags1}, {tags2}")
 	return tags2, tags1  # 英文标签在前
@@ -70,24 +66,24 @@ def getFurryScore(tags1: set, tags2: set, tags3: set, tags4: set) -> int:  # 计
 	furry = 0
 	entags = tags1.union(tags3)
 	cntags = tags2.union(tags4)
-	racelist2 = list(racedict.keys())
+	# racelist2 = list(racedict.keys())
 	# print(entags, cntags, sep="\n")
 	
 	for race in entags:
 		if race.lower() in racelist:
 			furry += 2
-	
 	for race in cntags:
-		if race in racelist2:
+		if race in racedict.keys():
 			furry += 2
-			
 	return furry
 
 
-def getFormattedTags(tags: set) -> str:
+def getFormattedTags(tags: set) -> str:  # 简化的 formatTags，用于系列zip合集
 	tags1, tags2 = translateTags(tags)
 	if tags2:
 		tags2 = f"特殊：{sortTags(tags2)}\n"
+	else:
+		tags2 = ""
 	info = f"{sortTags(tags1)}\n{tags2}".strip()
 	return info
 
@@ -96,13 +92,15 @@ def formatTags(tags1: set, tags2: set, unsure1: set, unsure2: set) -> str:
 	tags3 = ""
 	if unsure1:
 		unsure1 = unsure1.difference(tags1)  # 去重，获取作者未标注的标签
-		if "Linux" in platform():
-			tags3 = f"可能存在：{sortTags(unsure1)}"
-		else:
+		if testMode:
 			tags3 = f"可能存在：{sortTags(unsure1)}\n{sortTags(unsure2)}"
+		else:
+			tags3 = f"可能存在：{sortTags(unsure1)}"
 	
 	if tags2:
 		tags2 = f"特殊：{sortTags(tags2)}\n"
+	else:
+		tags2 = ""
 	tags = f"{sortTags(tags1)}\n{tags2}{tags3}".strip()
 	# if __name__ == "__main__":  # 输出信息
 	# 	print(f"tags: {info}\n")
@@ -115,6 +113,9 @@ def getInfoFromText(text: str, tags="", lang="", *, num=0) -> tuple[str, int]:
 		lang = getLanguage(text)
 		
 	textlist = text[:500].split("\n")[:4]
+	author = f'by #{textlist[1].replace(transWords("author", lang), "")}'
+	url = textlist[2].replace(transWords("url", lang), "")
+	
 	if "zh_cn" in lang and __name__ != "__main__":   # 调用时转换
 		title = OpenCC('s2twp.json').convert(textlist[0])
 	elif "zh_tw" in lang and __name__ != "__main__":
@@ -124,9 +125,6 @@ def getInfoFromText(text: str, tags="", lang="", *, num=0) -> tuple[str, int]:
 		
 	if num:
 		title = f"第{num}篇：{title}"
-	author = f'by #{textlist[1].replace(transWords("author", lang), "")}'
-	url = textlist[2].replace(transWords("url", lang), "")
-	
 	if not tags:
 		tags = textlist[3].replace("标签：", "").replace("標籤：", "")
 		tags = set(tags.replace(transWords("hashtags", lang), "").split(" #"))
@@ -136,44 +134,30 @@ def getInfoFromText(text: str, tags="", lang="", *, num=0) -> tuple[str, int]:
 	tags3, tags4 = getTagsFromText(text, lang)
 	tags = formatTags(tags1, tags2, tags3, tags4)
 	furry = getFurryScore(tags1, tags2, tags3, tags4)
-	
 	info = f"{title}\n{author}\n{tags}\n{url}".strip()
 	if __name__ == "__main__":  # 输出信息
 		print(f"{info}\n福瑞指数：{furry:.1f}\n")
 	return info, furry
 
 
-def printInfo(path: str, *, num=0):
-	text = ""
-	name = os.path.split(path)[1]
-	ext = os.path.splitext(path)[1]
+def printInfo(path, num=0) -> tuple[str, int]:
+	return getInfoFromText(readFile(path), num=num)
 	
-	if ext.lower() == ".txt":
-		text = openText(path)
-	elif ext.lower() == ".docx":
-		try:
-			text = openDocx(path)
-		except Exception as e:
-			logging.warning(e)
-			try:
-				text = openDoc(path)
-			except Exception as e:
-				logging.warning(e)
-	elif ext.lower() == ".doc" and "Windows" in platform():
-		text = openDoc(path)
-	else:
-		print(f"当前文件：{name}暂不支持打印相关信息")
-	if text:
-		getInfoFromText(text, num=num)
 	
-
 @timer
-def main(path=default_path):
-	files = findFile(path, ".docx", ".txt")
-	# files = findFile(path, ".docx", ".txt", ".doc")
+def main(path=novel_path):
+	# path = os.path.dirname(path)
+	# path = os.path.dirname(path)
+	print(f"当前目录：{path}\n")
+	files = findFile(path, ".txt", ".docx")
+	
+	# from platform import platform
+	# if "Windows" in platform():  # 跑得很慢
+	# 	files.append(findFile(path, ".doc"))
+	
 	for i in range(len(files)):
-		file = files[i]
-		printInfo(file, num=i+1)
+		print(files[i])
+		printInfo(files[i], num=i+1)
 	
 	
 @timer
@@ -181,9 +165,8 @@ def test():
 	print("测试")
 
 	
-
 if __name__ == "__main__":
-	# testMode = 1
+	testMode = 0
 	if testMode:
 		test()
 	else:
